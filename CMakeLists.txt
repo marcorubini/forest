@@ -24,10 +24,20 @@ FetchContent_MakeAvailable(cpr)
 FetchContent_Declare(nlohmann_json GIT_REPOSITORY "https://github.com/nlohmann/json.git")
 FetchContent_MakeAvailable(nlohmann_json)
 
+set(SQLITECPP_RUN_CPPCHECK
+    OFF
+    CACHE BOOL "" FORCE)
+set(SQLITECPP_RUN_CPPLINT
+    OFF
+    CACHE BOOL "" FORCE)
+
+FetchContent_Declare(SQLiteCpp GIT_REPOSITORY "https://github.com/SRombauts/SQLiteCpp.git")
+FetchContent_MakeAvailable(SQLiteCpp)
+
 add_library(forest INTERFACE)
 add_library(forest::forest ALIAS forest)
 target_compile_features(forest INTERFACE cxx_std_20)
 target_include_directories(forest INTERFACE include)
-target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr nlohmann_json::nlohmann_json)
+target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr nlohmann_json::nlohmann_json SQLiteCpp)
 
 add_subdirectory(test)
