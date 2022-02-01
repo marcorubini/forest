@@ -21,10 +21,13 @@ FetchContent_MakeAvailable(banana)
 FetchContent_Declare(cpr GIT_REPOSITORY "https://github.com/libcpr/cpr.git")
 FetchContent_MakeAvailable(cpr)
 
+FetchContent_Declare(nlohmann_json GIT_REPOSITORY "https://github.com/nlohmann/json.git")
+FetchContent_MakeAvailable(nlohmann_json)
+
 add_library(forest INTERFACE)
 add_library(forest::forest ALIAS forest)
 target_compile_features(forest INTERFACE cxx_std_20)
 target_include_directories(forest INTERFACE include)
-target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr)
+target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr nlohmann_json::nlohmann_json)
 
 add_subdirectory(test)
