@@ -1,5 +1,8 @@
-add_executable(00-dialogue 00-dialogue.cpp)
-target_link_libraries(00-dialogue PRIVATE forest)
+function(add_testcase test_name)
+  add_executable(${test_name} ${test_name}.cpp)
+  target_link_libraries(${test_name} PRIVATE forest)
+endfunction()
 
-add_executable(01-json_compiles 01-json_compiles.cpp)
-target_link_libraries(01-json_compiles PRIVATE forest)
+add_testcase(00-dialogue)
+add_testcase(01-json_compiles)
+add_testcase(02-curl_compiles)
