@@ -7,5 +7,6 @@
 #include <forest/persistence.hpp>
 #include <forest/transition_table.hpp>
 
+#include <forest/transitions/button.hpp>
 #include <forest/transitions/command.hpp>
 #include <forest/transitions/message.hpp>

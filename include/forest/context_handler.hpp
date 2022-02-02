@@ -1,5 +1,6 @@
 #pragma once
 #include <concepts>
+#include <iostream>
 #include <map>
 #include <string>
 #include <vector>
@@ -11,12 +12,25 @@
 #include <forest/concepts/event.hpp>
 #include <forest/concepts/state.hpp>
 #include <forest/concepts/transition.hpp>
+#include <forest/events/button_pressed.hpp>
 #include <forest/events/message.hpp>
 #include <forest/persistence.hpp>
 #include <forest/transition_table.hpp>
 
 namespace forest
 {
+  class button
+  {
+  public:
+    std::string id;
+    std::string text;
+
+    button (std::string id, std::string text)
+      : id (id)
+      , text (text)
+    {}
+  };
+
   template<std::copy_constructible T>
   class context
   {
@@ -50,9 +64,24 @@ namespace forest
       cache_ref.get () = std::move (cache);
     }
 
-    auto send_message (std::string text) const -> void
+    auto send_message (std::string text, std::initializer_list<std::initializer_list<button>> buttons = {}) const -> void
     {
-      banana::api::send_message (agent_ref.get (), {.chat_id = chat_id, .text = std::move (text)});
+      if (buttons.size () == 0) {
+        banana::api::send_message (agent_ref.get (), {.chat_id = chat_id, .text = std::move (text)});
+      } else {
+        auto markup = banana::api::inline_keyboard_markup_t ();
+        for (auto row : buttons) {
+          auto curr_row = std::vector<banana::api::inline_keyboard_button_t> ();
+          for (auto button : row) {
+            curr_row.push_back (
+              banana::api::inline_keyboard_button_t {.text = button.text, .callback_data = button.id});
+          }
+          markup.inline_keyboard.push_back (curr_row);
+        }
+        std::cerr << "Sending message with " << markup.inline_keyboard.size () << " button rows" << std::endl;
+        banana::api::send_message (agent_ref.get (),
+          {.chat_id = chat_id, .text = std::move (text), .reply_markup = markup});
+      }
     }
 
     // === persistence
@@ -149,6 +178,23 @@ namespace forest
         context_storage& storage = context_map.at (chat_id);
         context_type context = get_context (chat_id, storage);
 
+        if (auto new_state = storage.table.trigger (context, storage.state, event); new_state.has_value ()) {
+          handle_on_exit (context, storage.state);
+          storage.state = new_state.value ();
+          handle_on_entry (context, storage.state);
+        }
+      } else if (auto button = update.callback_query; button) {
+        auto chat_id = button->message->chat.id;
+        auto event = events::button_pressed (button->data.value ());
+
+        if (!context_map.contains (chat_id)) {
+          context_storage& storage =
+            context_map.emplace (chat_id, context_storage {cache_init, table_init, state_init}).first->second;
+          handle_on_entry (get_context (chat_id, storage), storage.state);
+        }
+
+        context_storage& storage = context_map.at (chat_id);
+        context_type context = get_context (chat_id, storage);
         if (auto new_state = storage.table.trigger (context, storage.state, event); new_state.has_value ()) {
           handle_on_exit (context, storage.state);
           storage.state = new_state.value ();

@@ -111,6 +111,24 @@ int main (int argc, char** argv)
       return state_start {};
     });
 
+  auto cmd_options =
+    forest::command_transition ("/options", "scegli una azione", [] (context_type ctx, state_start& state, std::string params) {
+      auto btn1 = forest::button ("btn1", "stampa messaggio");
+      auto btn2 = forest::button ("btn2", "stampa misura");
+      ctx.send_message ("Seleziona una azione", {{btn1, btn2}});
+      std::cerr << "cmd_options" << std::endl;
+      return state_start {};
+    });
+
+  auto on_press_btn1 = forest::button_transition ("btn1", [] (context_type ctx, state_start& state) {
+    ctx.send_message ("hello world");
+    return state_start {};
+  });
+
+  auto on_press_btn2 = forest::button_transition ("btn2", [=] (context_type ctx, state_start& state) mutable {
+    return cmd_stampa_misura (ctx, state, {});
+  });
+
   // ===
 
   std::string api = argv[1];
@@ -119,10 +137,16 @@ int main (int argc, char** argv)
 
   bool ok = banana::api::delete_my_commands (agent, {}).get ();
   std::cerr << "delete commands result: " << ok << std::endl;
-  ok = banana::api::set_my_commands (agent, {.commands = {cmd_config, cmd_stampa_misura, cmd_gender}}).get ();
+  ok = banana::api::set_my_commands (agent, {.commands = {cmd_config, cmd_stampa_misura, cmd_gender, cmd_options}})
+         .get ();
   std::cerr << "set commands result: " << ok << std::endl;
 
-  auto table = forest::make_transition_table<state_start> (cmd_config, cmd_stampa_misura, cmd_gender);
+  auto table = forest::make_transition_table<state_start> (cmd_config, //
+    cmd_stampa_misura,
+    cmd_gender,
+    cmd_options,
+    on_press_btn1,
+    on_press_btn2);
   std::cerr << "table created" << std::endl;
 
   try {
@@ -131,7 +155,7 @@ int main (int argc, char** argv)
 
     banana::integer_t offset = 0;
     while (true) {
-      auto allowed = std::vector<std::string> {"message"};
+      auto allowed = std::vector<std::string> {"message", "callback_query"};
       auto updates = banana::api::get_updates (agent, {.offset = offset, .allowed_updates = allowed}).get ();
 
       for (banana::api::update_t u : updates) {
