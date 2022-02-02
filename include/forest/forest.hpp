@@ -4,6 +4,7 @@
 #include <forest/concepts/transition.hpp>
 
 #include <forest/context_handler.hpp>
+#include <forest/persistence.hpp>
 #include <forest/transition_table.hpp>
 
 #include <forest/transitions/command.hpp>

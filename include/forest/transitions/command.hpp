@@ -27,17 +27,20 @@ namespace forest
     }
 
     template<Context Ctx, State<Ctx> StateType>
-      requires (std::invocable<Action, Ctx, StateType&>)
+      requires (std::invocable<Action, Ctx, StateType&, std::string>)
     bool accepts (Ctx ctx, StateType&, events::message e) const
     {
       return e.text.starts_with (prefix);
     }
 
     template<Context Ctx, State<Ctx> StateType>
-      requires (std::invocable<Action, Ctx, StateType&>)
+      requires (std::invocable<Action, Ctx, StateType&, std::string>)
     auto operator() (Ctx ctx, StateType& state, events::message e)
     {
-      return std::invoke (action, ctx, state);
+      assert (e.text.starts_with (prefix));
+      // TODO: more robust parsing of parameters
+      auto param_start = std::min (prefix.length () + 1, e.text.length ());
+      return std::invoke (action, ctx, state, e.text.substr (param_start));
     }
   };
 

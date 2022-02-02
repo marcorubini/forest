@@ -7,7 +7,7 @@ import os
 class Forest(ConanFile):
     name = "forest"
     version = "0.1"
-    requires = []
+    requires = ["sqlite3/3.37.2", "sqlitecpp/3.1.1"]
     settings = "build_type"
 
     exports_sources = "CMakeLists.txt", "include/*", "test/*", "cmake/*"

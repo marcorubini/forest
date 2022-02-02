@@ -12,6 +12,7 @@
 #include <forest/concepts/state.hpp>
 #include <forest/concepts/transition.hpp>
 #include <forest/events/message.hpp>
+#include <forest/persistence.hpp>
 #include <forest/transition_table.hpp>
 
 namespace forest
@@ -27,14 +28,16 @@ namespace forest
     banana::integer_t chat_id;
     std::reference_wrapper<T> cache_ref;
     std::reference_wrapper<banana::agent::cpr_async> agent_ref;
+    std::reference_wrapper<persistence> persistence_ref;
 
   public:
     context () = default;
 
-    context (banana::integer_t chat_id, T& cache_ref, banana::agent::cpr_async& agent_ref)
+    context (banana::integer_t chat_id, T& cache_ref, banana::agent::cpr_async& agent_ref, persistence& ref)
       : chat_id (chat_id)
       , cache_ref (cache_ref)
       , agent_ref (agent_ref)
+      , persistence_ref (ref)
     {}
 
     auto get_cache () const -> cache_reference
@@ -50,6 +53,43 @@ namespace forest
     auto send_message (std::string text) const -> void
     {
       banana::api::send_message (agent_ref.get (), {.chat_id = chat_id, .text = std::move (text)});
+    }
+
+    // === persistence
+
+    std::optional<std::string> get_value (std::string kName) const
+    {
+      return persistence_ref.get ().get_value (chat_id, kName);
+    }
+
+    bool set_value (std::string kName, std::string kValue) const
+    {
+      return persistence_ref.get ().set_value (chat_id, kName, kValue);
+    }
+
+    std::optional<long long> get_value_ll (std::string kName) const
+    {
+      return persistence_ref.get ().get_value_ll (chat_id, kName);
+    }
+
+    bool set_value_ll (std::string kName, long long kValue) const
+    {
+      return persistence_ref.get ().set_value_ll (chat_id, kName, kValue);
+    }
+
+    std::optional<nlohmann::json> get_value_json (std::string kName) const
+    {
+      return persistence_ref.get ().get_value_json (chat_id, kName);
+    }
+
+    bool set_value_json (std::string kName, nlohmann::json const& json) const
+    {
+      return persistence_ref.get ().set_value_json (chat_id, kName, json);
+    }
+
+    bool delete_value (std::string kName) const
+    {
+      return persistence_ref.get ().delete_value (chat_id, kName);
     }
   };
 
@@ -82,14 +122,16 @@ namespace forest
     cache_type cache_init;
     table_type table_init;
     state_type state_init;
+    persistence persistent_storage;
 
   public:
-    context_handler (agent_type& agent, cache_type cache, table_type table, state_type state)
+    context_handler (agent_type& agent, cache_type cache, table_type table, state_type state, std::string db_filename)
       : context_map ()
       , agent_ref (agent)
       , cache_init (std::move (cache))
       , table_init (std::move (table))
       , state_init (std::move (state))
+      , persistent_storage (db_filename)
     {}
 
     void handle_update (banana::api::update_t update)
@@ -134,7 +176,7 @@ namespace forest
 
     context<cache_type> get_context (chat_id_type chat_id, context_storage& storage)
     {
-      return context<cache_type> (chat_id, storage.cache, agent_ref.get ());
+      return context<cache_type> (chat_id, storage.cache, agent_ref.get (), persistent_storage);
     }
   };
 
@@ -142,6 +184,7 @@ namespace forest
   context_handler (banana::agent::cpr_async& agent,
     Cache cache,
     transition_table<std::variant<States...>, Transitions...> table,
-    StateStart state) -> context_handler<Cache, transition_table<std::variant<States...>, Transitions...>>;
+    StateStart state,
+    std::string) -> context_handler<Cache, transition_table<std::variant<States...>, Transitions...>>;
 
 } // namespace forest
