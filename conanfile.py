@@ -8,14 +8,14 @@ class Forest(ConanFile):
     name = "forest"
     version = "0.1"
     requires = ["sqlite3/3.37.2", "sqlitecpp/3.1.1"]
-    settings = "build_type"
+    settings = ["build_type", "os"]
 
     exports_sources = "CMakeLists.txt", "include/*", "test/*", "cmake/*"
     no_copy_source = True
 
     def layout(self):
         self.folders.build = os.path.join(
-            "build", self.settings.get_safe("build_type", default="Release"))
+            "build", str(self.settings.os), str(self.settings.build_type))
         self.folders.generators = self.folders.build
 
     def generate(self):

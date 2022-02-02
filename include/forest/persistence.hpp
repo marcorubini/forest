@@ -1,5 +1,5 @@
 #pragma once
-#include <SQLiteCpp/SQliteCpp.h>
+#include <SQLiteCpp/SQLiteCpp.h>
 #include <banana/api.hpp>
 #include <cassert>
 #include <mutex>
@@ -33,7 +33,6 @@ namespace forest
     static auto create_database (std::string filename)
     {
       SQLite::Database db (filename, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
-      assert (("database not initialized.", db));
       db.exec (str_create_db);
       return db;
     }

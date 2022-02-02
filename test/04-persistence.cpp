@@ -1,5 +1,7 @@
+#include <cpr/cpr.h>
 #include <forest/forest.hpp>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <set>
 
@@ -48,7 +50,7 @@ int main (int argc, char** argv)
     });
 
   auto rng = std::mt19937 (std::random_device () ());
-  auto cmd_stampa_misura = forest::command_transition ("/stampaMisura",
+  auto cmd_stampa_misura = forest::command_transition ("/stampamisura",
     "stampa una misura casuale",
     [&rng] (context_type ctx, state_start& state, std::string params) {
       auto unita = ctx.get_value ("unita");
@@ -69,16 +71,58 @@ int main (int argc, char** argv)
       return state_start {};
     });
 
+  auto cmd_gender = forest::command_transition ("/indovinagenere",
+    "stampa il genere del nome configurato",
+    [] (context_type ctx, state_start& state, std::string params) {
+      auto nome = ctx.get_value ("nome");
+      if (!nome.has_value ()) {
+        ctx.send_message ("nome non configurato.");
+        return state_start {};
+      }
+
+      auto rest_url = "https://api.genderize.io/?name=" + nome.value ();
+      auto response = cpr::Get (cpr::Url {rest_url});
+
+      if (response.status_code != 200) {
+        std::cerr << "status_code : " << response.status_code << std::endl;
+        ctx.send_message ("errore server.");
+        return state_start {};
+      }
+
+      try {
+        std::cerr << "response: " << response.text << std::endl;
+        auto json = nlohmann::json::parse (response.text);
+        auto gender = json.at ("gender").get<std::string> ();
+        auto probability = json.at ("probability").get<double> ();
+
+        if (gender == "male")
+          gender = "maschio";
+        if (gender == "female")
+          gender = "femmina";
+        ctx.send_message (std::string ("genere: ") + gender + ", probabilità: " + std::to_string (probability));
+        return state_start {};
+      } catch (std::exception& e) {
+        std::cerr << typeid (e).name () << std::endl;
+        std::cerr << e.what () << std::endl;
+        ctx.send_message ("errore server.");
+        return state_start {};
+      }
+
+      return state_start {};
+    });
+
   // ===
 
   std::string api = argv[1];
   auto agent = banana::agent::cpr_async (api);
   std::cerr << "agent started with api " << api << std::endl;
 
-  banana::api::set_my_commands (agent, {.commands = {cmd_config, cmd_stampa_misura}});
-  std::cerr << "commands set" << std::endl;
+  bool ok = banana::api::delete_my_commands (agent, {}).get ();
+  std::cerr << "delete commands result: " << ok << std::endl;
+  ok = banana::api::set_my_commands (agent, {.commands = {cmd_config, cmd_stampa_misura, cmd_gender}}).get ();
+  std::cerr << "set commands result: " << ok << std::endl;
 
-  auto table = forest::make_transition_table<state_start> (cmd_config, cmd_stampa_misura);
+  auto table = forest::make_transition_table<state_start> (cmd_config, cmd_stampa_misura, cmd_gender);
   std::cerr << "table created" << std::endl;
 
   try {

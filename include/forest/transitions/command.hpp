@@ -1,8 +1,12 @@
 #pragma once
+#include <algorithm>
 #include <banana/api.hpp>
 #include <forest/concepts/context.hpp>
 #include <forest/concepts/transition.hpp>
 #include <forest/events/message.hpp>
+#include <functional>
+#include <iostream>
+#include <limits>
 
 namespace forest
 {
@@ -23,6 +27,7 @@ namespace forest
 
     operator banana::api::bot_command_t () const
     {
+      std::cerr << "Adding command " << prefix.substr (1) << ": " << description << std::endl;
       return {prefix.substr (1), description};
     }
 
@@ -39,7 +44,7 @@ namespace forest
     {
       assert (e.text.starts_with (prefix));
       // TODO: more robust parsing of parameters
-      auto param_start = std::min (prefix.length () + 1, e.text.length ());
+      std::size_t param_start = std::min (prefix.length () + 1, e.text.length ());
       return std::invoke (action, ctx, state, e.text.substr (param_start));
     }
   };

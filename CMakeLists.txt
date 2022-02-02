@@ -8,8 +8,8 @@ project(
 
 include(FetchContent)
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE})
-list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE})
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 # set(BANANA_ENABLE_CORO TRUE)
 #
@@ -37,14 +37,14 @@ set(SQLITECPP_INTERNAL_SQLITE
 # FetchContent_Declare(SQLiteCpp GIT_REPOSITORY "https://github.com/SRombauts/SQLiteCpp.git")
 # FetchContent_MakeAvailable(SQLiteCpp)
 
-find_package(SQLite3 CONFIG REQUIRED)
+# find_package(SQLite3 CONFIG REQUIRED)
 find_package(sqlitecpp CONFIG REQUIRED)
 
 add_library(forest INTERFACE)
 add_library(forest::forest ALIAS forest)
 target_compile_features(forest INTERFACE cxx_std_20)
 target_include_directories(forest INTERFACE include)
-target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr nlohmann_json::nlohmann_json SQLiteCpp
-                                       SQLite::SQLite3)
+target_link_libraries(forest INTERFACE banana banana-cpr cpr::cpr nlohmann_json::nlohmann_json SQLiteCpp)
+target_compile_definitions(forest INTERFACE WIN32_LEAN_AND_MEAN NOMINMAX)
 
 add_subdirectory(test)
