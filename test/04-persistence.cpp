@@ -4,6 +4,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <sstream>
 
 int main (int argc, char** argv)
 {
@@ -22,6 +23,10 @@ int main (int argc, char** argv)
 
   auto cmd_config =
     forest::command_transition ("/config", "config unita nome", [] (context_type ctx, state_start& state, std::string params) {
+      /**
+       * Accetta come parametri una unità di misura (tra km, m, mi) e un nome di persona.
+       * Salva i due parametri in un database persistente.
+       */
       auto stream = std::istringstream (params);
       std::string misura;
       std::string nome;
@@ -53,6 +58,9 @@ int main (int argc, char** argv)
   auto cmd_stampa_misura = forest::command_transition ("/stampamisura",
     "stampa una misura casuale",
     [&rng] (context_type ctx, state_start& state, std::string params) {
+      /**
+       * Stampa una misura casuale usando l'unità di misura salvata come configurazione.
+       */
       auto unita = ctx.get_value ("unita");
 
       if (!unita.has_value ()) {
@@ -60,7 +68,7 @@ int main (int argc, char** argv)
       }
 
       auto dist = std::uniform_int_distribution<int> (0, 1000000);
-      auto misura = dist (rng);
+      int misura = dist (rng);
 
       if (unita.value () == "km")
         misura /= 1000;
@@ -74,14 +82,18 @@ int main (int argc, char** argv)
   auto cmd_gender = forest::command_transition ("/indovinagenere",
     "stampa il genere del nome configurato",
     [] (context_type ctx, state_start& state, std::string params) {
-      auto nome = ctx.get_value ("nome");
+      /**
+       * Deduce il genere del nome configurato invocando l'api rest api.genderize.io
+       */
+
+      std::optional<std::string> nome = ctx.get_value ("nome");
       if (!nome.has_value ()) {
         ctx.send_message ("nome non configurato.");
         return state_start {};
       }
 
-      auto rest_url = "https://api.genderize.io/?name=" + nome.value ();
-      auto response = cpr::Get (cpr::Url {rest_url});
+      std::string rest_url = "https://api.genderize.io/?name=" + nome.value ();
+      cpr::Response response = cpr::Get (cpr::Url {rest_url});
 
       if (response.status_code != 200) {
         std::cerr << "status_code : " << response.status_code << std::endl;
@@ -91,15 +103,19 @@ int main (int argc, char** argv)
 
       try {
         std::cerr << "response: " << response.text << std::endl;
-        auto json = nlohmann::json::parse (response.text);
-        auto gender = json.at ("gender").get<std::string> ();
-        auto probability = json.at ("probability").get<double> ();
+        nlohmann::json json = nlohmann::json::parse (response.text);
+        std::string gender = json.at ("gender").get<std::string> ();
+        double probability = json.at ("probability").get<double> ();
 
         if (gender == "male")
           gender = "maschio";
         if (gender == "female")
           gender = "femmina";
-        ctx.send_message (std::string ("genere: ") + gender + ", probabilità: " + std::to_string (probability));
+
+        std::ostringstream response;
+        response << "nome: " << nome.value () << ", genere: " << gender
+                 << ", probabilità: " << std::to_string (probability);
+        ctx.send_message (response.str ());
         return state_start {};
       } catch (std::exception& e) {
         std::cerr << typeid (e).name () << std::endl;

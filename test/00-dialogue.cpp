@@ -5,8 +5,7 @@ int main (int argc, char** argv)
 {
   std::cerr << "Bot start" << std::endl;
 
-  using cache_type = std::monostate;
-  using context_type = forest::context<cache_type>;
+  using context_type = forest::context<>;
 
   struct state_start;
   struct state_ask_name;
@@ -21,21 +20,16 @@ int main (int argc, char** argv)
   struct state_start
   {
     auto on_entry (context_type ctx)
-    {
-      std::cerr << "Entry state start" << std::endl;
-    }
+    {}
 
     auto on_exit (context_type ctx)
-    {
-      std::cerr << "Exit state start" << std::endl;
-    }
+    {}
   };
 
   struct state_ask_name
   {
     auto on_entry (context_type ctx)
     {
-      std::cerr << "Enter ask name" << std::endl;
       ctx.send_message ("What's your name?");
     }
 
@@ -108,7 +102,7 @@ int main (int argc, char** argv)
   auto exit_ask_age_transition =
     // ---------------------------------------------- INPUT STATE --------- INCOMING MESSAGE
     forest::message_transition ([] (context_type ctx, state_ask_age& state, std::string age) {
-      auto name = state.name;
+      std::string name = state.name;
       ctx.send_message ("Hi " + name + ", your age is " + age);
 
       // --- OUTPUT STATE
@@ -125,7 +119,7 @@ int main (int argc, char** argv)
   auto exit_pet_ask_age_transition =
     // ---------------------------------------------- INPUT STATE ------------- INCOMING MESSAGE
     forest::message_transition ([] (context_type ctx, state_ask_pet_age& state, std::string age) {
-      auto name = state.name;
+      std::string name = state.name;
       ctx.send_message ("Your pet's name is " + name + " and your pet's age is " + age);
 
       // OUTPUT STATE
@@ -155,7 +149,7 @@ int main (int argc, char** argv)
     exit_pet_ask_age_transition);
 
   try {
-    auto handler = forest::context_handler (agent, cache_type {}, table, state_start {}, "db00.db3");
+    auto handler = forest::context_handler (agent, {}, table, state_start {}, "db00.db3");
 
     std::cerr << "Handler constructed" << std::endl;
 

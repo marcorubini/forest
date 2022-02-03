@@ -31,7 +31,7 @@ namespace forest
     {}
   };
 
-  template<std::copy_constructible T>
+  template<std::copy_constructible T = std::monostate>
   class context
   {
   public:
@@ -226,7 +226,7 @@ namespace forest
     }
   };
 
-  template<std::copy_constructible Cache, class... States, class... Transitions, class StateStart>
+  template<std::copy_constructible Cache = std::monostate, class... States, class... Transitions, class StateStart>
   context_handler (banana::agent::cpr_async& agent,
     Cache cache,
     transition_table<std::variant<States...>, Transitions...> table,
