@@ -65,6 +65,8 @@ It allows accessing the current state using `is` and `current_state` member temp
 \
 
 ```cpp
+namespace forest::sm
+{
   // Context concepts
   template<class T>
   concept Context = requires(T context)
@@ -78,6 +80,7 @@ It allows accessing the current state using `is` and `current_state` member temp
     { context.is</*any-state*/>() } -> std::boolean_testable;
     { context.current_state</*any-state*/>() } -> std::same_as</*any-state-reference*/>;
   };
+}
 ```
 
 ### State
@@ -91,6 +94,8 @@ A state can optionally define a `on_exit` member method, which implements the **
 \
 
 ```cpp
+namespace forest::sm
+{
   // State concepts
   template<class T>
   concept State = requires(T state)
@@ -111,21 +116,22 @@ A state can optionally define a `on_exit` member method, which implements the **
   {
     state.on_exit(context);
   };
+}
 
-  // Examples
-  struct state_disconnected
-  {
-    template<Context Ctx>
-    void on_entry(Ctx context);
+// Examples
+struct state_disconnected
+{
+  template<Context Ctx>
+  void on_entry(Ctx context);
 
-    template<Context Ctx>
-    void on_exit(Ctx context);
-  };
+  template<Context Ctx>
+  void on_exit(Ctx context);
+};
 
-  struct state_connected
-  {
-    int ip_address;
-  };
+struct state_connected
+{
+  int ip_address;
+};
 ```
 
 _(todo: consider exposing events to `on_entry` and `on_exit` methods, since they are always invoked after a transition occurs.)_
@@ -135,18 +141,21 @@ _(todo: consider exposing events to `on_entry` and `on_exit` methods, since they
 An event is a **std::move-constructible** user defined class.
 
 ```cpp
+namespace forest::sm
+{
   // Event concept
   template<class T>
   concept Event = requires (T event)
   {
     requires std::move_constructible<T>;
   };
+}
 
-  // Examples
-  struct event_connect
-  {
-    int ip_address;
-  };
+// Examples
+struct event_connect
+{
+  int ip_address;
+};
 ```
 
 ### Guard
@@ -156,6 +165,8 @@ A guard is a predicate invocable given a context, a state and an event.
 \
 
 ```cpp
+namespace forest::sm
+{
   // Guard concept
   template<class T, class Context, class State, class Event>
   concept Guard = requires(T guard, Context context, State state, Event event)
@@ -166,6 +177,7 @@ A guard is a predicate invocable given a context, a state and an event.
 
     { guard(context, state, event) } -> std::boolean_testable;
   };
+}
 ```
 
 ### Transition
@@ -183,6 +195,8 @@ A Transition with no guard accepts all events for which it can be invoked.
 \
 
 ```cpp
+namespace forest::sm
+{
   template<class T, class Context, class State, class Event>
   concept Transition = requires(T transition, Context context, State state, Event event)
   {
@@ -200,22 +214,23 @@ A Transition with no guard accepts all events for which it can be invoked.
   {
     { transition.accepts(context, state, event) } -> std::boolean_testable;
   };
+}
 
-  // Examples
-  struct transition_connect
+// Examples
+struct transition_connect
+{
+  template<Context Ctx>
+  bool accepts(Ctx context, state_disconnected& state, event_connect event) const
   {
-    template<Context Ctx>
-    bool accepts(Ctx context, state_disconnected& state, event_connect event) const
-    {
-      return true;
-    }
+    return true;
+  }
 
-    template<Context Ctx>
-    state_connected operator()(Ctx context, state_disconnected& state, event_connect event) const
-    {
-      return state_connected {.ip_address = event.ip_address};
-    }
-  };
+  template<Context Ctx>
+  state_connected operator()(Ctx context, state_disconnected& state, event_connect event) const
+  {
+    return state_connected {.ip_address = event.ip_address};
+  }
+};
 ```
 
 ### Transition table
@@ -223,8 +238,11 @@ A Transition with no guard accepts all events for which it can be invoked.
 A transition table is a collection of transitions.
 
 ```cpp
+namespace forest::sm
+{
   template<std::move_constructible... Transitions>
   using transition_table = std::tuple<Transitions...>;
+}
 ```
 
 ### State machine
@@ -248,20 +266,23 @@ It exposes a `start` member method, which completes initialization enter enters 
 It exposes a `stop` member method, which transitions to a `terminate` pseudo-state.
 
 ```cpp
-template<class T>
-concept StateMachine = requires(T state_machine)
+namespace forest::sm
 {
-  typename T::context_type;
-  typename T::transition_table;
-  typename T::initial_state;
-  typename T::state_type;
+  template<class T>
+  concept StateMachine = requires(T state_machine)
+  {
+    typename T::context_type;
+    typename T::transition_table;
+    typename T::initial_state;
+    typename T::state_type;
 
-  { state_machine.current_state</*some-state*/>() } -> std::same_as</*some-state-ref*/>;
-  { state_machine.is</*some-state*/>() } -> std::same_as<bool>;
-  { state_machine.process_event(/*some-event*/) } -> std::same_as<void>;
-  { state_machine.start(/*optional-event*/) } -> std::same_as<void>;
-  { state_machine.stop(/*optional-event*/); } -> std::same_as<void>;
-};
+    { state_machine.current_state</*some-state*/>() } -> std::same_as</*some-state-ref*/>;
+    { state_machine.is</*some-state*/>() } -> std::same_as<bool>;
+    { state_machine.process_event(/*some-event*/) } -> std::same_as<void>;
+    { state_machine.start(/*optional-event*/) } -> std::same_as<void>;
+    { state_machine.stop(/*optional-event*/); } -> std::same_as<void>;
+  };
+}
 ```
 
 ### State machine control flow
@@ -299,11 +320,14 @@ The problem of this proposal is that the event will be fired unconditionally, ev
 Another approach is to define a subtype of State called TimedState, that expose a `timeout_duration` method.
 
 ```cpp
+namespace forest::sm
+{
   template<class T>
   concept TimedState = forest::State<T> && requires(T state)
   {
     { state.timeout_duration() } -> std::same_as<std::chrono::milliseconds>;
   };
+}
 ```
 
 Right before a TimedState **on-entry** action is executed, the state machine starts a timer.
