@@ -1,5 +1,7 @@
 #pragma once
+#include <chrono>
 #include <concepts>
+#include <functional>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -7,22 +9,31 @@
 
 namespace forest::sm
 {
-  // TODO: implement timer methods
-
   template<class T>
   concept Context = requires (T context)
   {
     typename T::state_machine_type;
 
     requires std::copy_constructible<T>;
-  };
 
-  // todo: implement TimedState
+    // clang-format off
+    { context.entry_time_elapsed() } -> std::same_as<std::chrono::milliseconds>;
+    { context.reset_timer() } -> std::same_as<void>;
+    // clang-format on
+  };
 
   template<class T>
   concept State = requires (T state)
   {
     requires std::move_constructible<T>;
+  };
+
+  template<class T>
+  concept TimedState = State<T> && requires (T state)
+  {
+    // clang-format off
+    { state.timeout_duration() } -> std::same_as<std::chrono::milliseconds>;
+    // clang-format on
   };
 
   template<class T, class C>
@@ -187,8 +198,6 @@ namespace forest::sm
     bool state_changed;
   };
 
-  // TODO: handle TimedState
-
   template<class T, Context C, State S, Event E, class Storage>
   constexpr transition_result trigger_transition (T&& table, C context, S& state, E event, Storage& storage)
   {
@@ -198,7 +207,7 @@ namespace forest::sm
         transition (std::move (context), state, std::move (event));
         return false;
       } else {
-        using new_state_type = transition_result_t<TransitionType, S, C, E>;
+        using new_state_type = transition_result_t<TransitionType, C, S, E>;
 
         // Perform the on-exit action before triggering the transition
         if constexpr (StateWithExitAction<S, C>)
@@ -206,6 +215,10 @@ namespace forest::sm
 
         // Trigger the transition and store the result
         new_state_type new_state = transition (context, state, std::move (event));
+
+        // Start the timer
+        if constexpr (TimedState<new_state_type>)
+          context.reset_timer ();
 
         // Perform the on-entry action
         if constexpr (StateWithEntryAction<new_state_type, C>)
@@ -250,6 +263,9 @@ namespace forest::sm
   struct shutdown_event
   {};
 
+  struct timeout_event
+  {};
+
   namespace details
   {
     template<class...>
@@ -278,8 +294,6 @@ namespace forest::sm
     static_assert (sizeof...(Transitions) > 0);
 
     struct context_type;
-    using transition_table = forest::sm::transition_table<Transitions...>;
-    using state_type = std::variant<initialization_state, shutdown_state, States...>;
 
     static constexpr bool has_initialization_transition = //
       (Transition<Transitions, context_type, initialization_state&, initialization_event> || ...);
@@ -287,6 +301,12 @@ namespace forest::sm
     template<State S>
     static constexpr bool has_shutdown_transition = //
       (Transition<Transitions, context_type, S&, shutdown_event> || ...);
+
+    static constexpr bool has_timed_state = (TimedState<States> || ...);
+
+    using transition_table = forest::sm::transition_table<Transitions...>;
+    using state_type = std::variant<initialization_state, shutdown_state, States...>;
+    using time_point_type = std::chrono::steady_clock::time_point;
 
     constexpr state_machine (Transitions... transitions) //
       : _table (std::move (transitions)...)
@@ -340,6 +360,10 @@ namespace forest::sm
 
         context_type context {*this};
         _state = first_state {};
+
+        if constexpr (TimedState<first_state>)
+          reset_timer ();
+
         if constexpr (StateWithEntryAction<first_state, context_type>)
           current_state<first_state> ().on_entry (context);
         return {.triggered = true, .state_changed = true};
@@ -375,16 +399,81 @@ namespace forest::sm
       return std::visit (handler, _state);
     }
 
+    constexpr transition_result process_timeouts ()
+    {
+      auto const handler = [&]<State S> (S& current) {
+        if constexpr (TimedState<S>)
+          if (entry_time_elapsed () > current.timeout_duration ())
+            return process_event (timeout_event {});
+
+        return transition_result {};
+      };
+
+      return std::visit (handler, _state);
+    }
+
+    [[nodiscard]] std::chrono::milliseconds entry_time_elapsed () const //
+    {
+      return std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - _timer_start);
+    }
+
+    void reset_timer () //
+    {
+      _timer_start = std::chrono::steady_clock::now ();
+    }
+
+    // clang-format off
   private:
+    // clang-format on
+
     transition_table _table;
     state_type _state;
+
+    [[no_unique_address]] time_point_type _timer_start;
+  };
+
+  template<State... States>
+  constexpr inline auto make_state_machine = []<std::move_constructible... Ts> (Ts... transitions)
+  {
+    return state_machine<details::type_list<Ts...>, details::type_list<States...>> (std::move (transitions)...);
   };
 
   template<std::move_constructible... Transitions, State... States>
   class state_machine<details::type_list<Transitions...>, details::type_list<States...>>::context_type
   {
+  public:
     using state_machine_type = state_machine;
-    std::reference_wrapper<state_machine_type> sm;
+    using state_machine_reference = std::reference_wrapper<state_machine>;
+
+  private:
+    state_machine_reference sm;
+
+  public:
+    constexpr context_type (state_machine& init)
+      : sm (init)
+    {}
+
+    constexpr void reset_timer () const //
+    {
+      sm.get ().reset_timer ();
+    }
+
+    [[nodiscard]] constexpr std::chrono::milliseconds entry_time_elapsed () const //
+    {
+      return sm.get ().entry_time_elapsed ();
+    }
+
+    template<State S>
+    [[nodiscard]] constexpr bool is () const
+    {
+      return sm->template is<S> ();
+    }
+
+    template<State S>
+    [[nodiscard]] constexpr S& current_state () const
+    {
+      return sm->template current_state<S> ();
+    }
   };
 
 } // namespace forest::sm
