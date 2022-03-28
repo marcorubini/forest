@@ -7,484 +7,208 @@
 #include <utility>
 #include <variant>
 
-namespace forest::sm
+#include <SQLiteCpp/SQLiteCpp.h>
+#include <hfsm2/machine.hpp>
+#include <nlohmann/json.hpp>
+#include <tgbot/tgbot.h>
+
+#include <forest/sm/button.hpp>
+#include <forest/sm/command.hpp>
+#include <forest/sm/context.hpp>
+#include <forest/sm/inline_query.hpp>
+#include <forest/sm/keyboard.hpp>
+#include <forest/sm/message.hpp>
+
+namespace forest
 {
-  template<class T>
-  concept Context = requires (T context)
+  using Machine = hfsm2::MachineT< //
+    hfsm2::Config::ContextT<bot_context>>;
+
+  // ===
+
+  template<class FSM, std::default_initializable Storage = std::monostate>
+  class bot
   {
-    typename T::state_machine_type;
+  public:
+    using fsm_type = FSM;
+    using instance_type = typename FSM::Instance;
+    using storage_type = Storage;
 
-    requires std::copy_constructible<T>;
-
-    // clang-format off
-    { context.entry_time_elapsed() } -> std::same_as<std::chrono::milliseconds>;
-    { context.reset_timer() } -> std::same_as<void>;
-    // clang-format on
-  };
-
-  template<class T>
-  concept State = requires (T state)
-  {
-    requires std::move_constructible<T>;
-  };
-
-  template<class T>
-  concept TimedState = State<T> && requires (T state)
-  {
-    // clang-format off
-    { state.timeout_duration() } -> std::same_as<std::chrono::milliseconds>;
-    // clang-format on
-  };
-
-  template<class T, class C>
-  concept StateWithEntryAction = State<T> && Context<C> && requires (T state, C context)
-  {
-    // clang-format off
-    { state.on_entry(context) } -> std::same_as<void>;
-    // clang-format on
-  };
-
-  template<class T, class C>
-  concept StateWithExitAction = State<T> && Context<C> && requires (T state, C context)
-  {
-    // clang-format off
-    { state.on_exit(context) } -> std::same_as<void>;
-    // clang-format on
-  };
-
-  template<class T>
-  concept Event = requires (T event)
-  {
-    requires std::move_constructible<T>;
-  };
-
-  template<class T, class C, class S, class E>
-  concept Guard = Context<C> && State<S> && Event<E> && requires (T guard, C context, S state, E event)
-  {
-    // clang-format off
-    { guard(context, state, event) } -> std::same_as<bool>;
-    // clang-format on
-  };
-
-  template<class T, class C, class S, class E>
-  concept InternalTransition = Context<C> && State<S> && Event<E> &&
-    requires (T transition, C context, S state, E event)
-  {
-    // clang-format off
-    { transition(context, state, event) } -> std::same_as<void>;
-    // clang-format on
-  };
-
-  template<class T, class C, class S, class E>
-  concept ExternalTransition = Context<C> && State<S> && Event<E> &&
-    requires (T transition, C context, S state, E event)
-  {
-    // clang-format off
-    { transition(context, state, event) } -> State;
-    // clang-format on
-  };
-
-  template<class T, class C, class S, class E>
-  concept Transition = InternalTransition<T, C, S, E> || ExternalTransition<T, C, S, E>;
-
-  template<class T, class C, class S, class E>
-  concept GuardedTransition = Transition<T, C, S, E> && requires (T transition, C context, S state, E event)
-  {
-    // clang-format off
-    { transition.accepts(context, state, event) } -> std::same_as<bool>;
-    // clang-format on
-  };
-
-  /**
-   * Helper class that adapts a transition and a guard to make a GuardedTransition.
-   */
-  template<std::move_constructible T, std::move_constructible G>
-  class guarded_transition
-  {
   private:
-    T _base;
-    G _guard;
+    TgBot::Bot _bot;
+    SQLite::Database _database;
+    std::map<std::int64_t, storage_type> _global_storage;
+    std::map<std::int64_t, bot_context> _context;
+    std::map<std::int64_t, instance_type> _instances;
+
+    static SQLite::Database create_db (std::string filename)
+    {
+      SQLite::Database db (std::move (filename), SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
+
+      static constexpr auto create_stm = "CREATE TABLE IF NOT EXISTS\n"
+                                         "sessions\n"
+                                         "(\n"
+                                         "chat_id INTEGER,\n"
+                                         "kName TEXT not null,\n"
+                                         "kValue TEXT null,\n"
+                                         "PRIMARY KEY (chat_id, kName)\n"
+                                         ")";
+      db.exec (create_stm);
+      return db;
+    }
 
   public:
-    constexpr guarded_transition (T base, G guard)
-      : _base (std::move (base))
-      , _guard (std::move (guard))
-    {}
-
-    template<Context C, State S, Event E>
-      requires (Guard<G, C, S, E>)
-    [[nodiscard]] constexpr bool accepts (C ctx, S& state, E event)
+    bot (std::string apikey, std::string filename)
+      : _bot (std::move (apikey))
+      , _database (create_db (std::move (filename)))
     {
-      return _guard (ctx, state, event);
-    }
+      // set commands
+      using StateList = typename FSM::StateList;
 
-    template<Context C, State S, Event E>
-      requires (Transition<T, C, S, E>&& Guard<G, C, S, E>)
-    constexpr auto operator() (C ctx, S& state, E event)
-    {
-      return _base (ctx, state, event);
-    }
-  };
-
-  template<class T, class G>
-  guarded_transition (T, G) -> guarded_transition<T, G>;
-
-  /**
-   * Helper type trait returns the result of a transition.
-   * If the argument is an InternalTransition, returns void.
-   */
-  template<class T, Context C, State S, Event E>
-    requires (Transition<T, C, S, E>)
-  using transition_result_t = std::invoke_result_t<T&, C, S&, E>;
-
-  template<std::move_constructible... Ts>
-  struct transition_table
-  {
-  private:
-    using tuple_type = std::tuple<Ts...>;
-    tuple_type storage;
-
-  public:
-    constexpr transition_table (Ts... init)
-      : storage (std::move (init)...)
-    {}
-
-    template<std::size_t I>
-    friend constexpr std::tuple_element_t<I, tuple_type>& get (transition_table& table)
-    {
-      return std::get<I> (table.storage);
-    }
-
-    template<std::size_t I>
-    friend constexpr std::tuple_element_t<I, tuple_type> const& get (transition_table const& table)
-    {
-      return std::get<I> (table.storage);
-    }
-
-    template<std::size_t I>
-    friend constexpr std::tuple_element_t<I, tuple_type>&& get (transition_table&& table)
-    {
-      return std::move (std::get<I> (table.storage));
-    }
-
-    template<std::size_t I>
-    friend constexpr std::tuple_element_t<I, tuple_type> const&& get (transition_table const&&) = delete;
-  };
-
-  template<class... Ts>
-  transition_table (Ts...) -> transition_table<Ts...>;
-
-  /**
-   * Invokes fn with each member of the transition table as single parameter
-   * fn(transition0), fn(transition1), ...
-   */
-  template<class T, std::move_constructible F>
-  constexpr void for_each_transition (T&& table, F fn)
-  {
-    constexpr std::size_t size = std::tuple_size_v<std::remove_cvref_t<T>>;
-
-    auto const invoke = [&]<std::size_t... Indices> (std::index_sequence<Indices...>)
-    {
-      using std::get;
-      (fn (get<Indices> (table)), ...);
-    };
-
-    invoke (std::make_index_sequence<size> ());
-  }
-
-  struct transition_result
-  {
-    bool triggered;
-    bool state_changed;
-  };
-
-  template<class T, Context C, State S, Event E, class Storage>
-  constexpr transition_result trigger_transition (T&& table, C context, S& state, E event, Storage& storage)
-  {
-    auto const trigger = [&]<class TransitionType> (TransitionType& transition) -> bool {
-      if constexpr (InternalTransition<TransitionType, C, S, E>) {
-        // Trigger the transition and don't change the state
-        transition (std::move (context), state, std::move (event));
-        return false;
-      } else {
-        using new_state_type = transition_result_t<TransitionType, C, S, E>;
-
-        // Perform the on-exit action before triggering the transition
-        if constexpr (StateWithExitAction<S, C>)
-          state.on_exit (context);
-
-        // Trigger the transition and store the result
-        new_state_type new_state = transition (context, state, std::move (event));
-
-        // Start the timer
-        if constexpr (TimedState<new_state_type>)
-          context.reset_timer ();
-
-        // Perform the on-entry action
-        if constexpr (StateWithEntryAction<new_state_type, C>)
-          new_state.on_entry (context);
-
-        // Change the state
-        storage = std::move (new_state);
-        return true;
-      }
-    };
-
-    auto const check_guard = [&]<Transition<C, S, E> TransitionType> (TransitionType& transition) {
-      if constexpr (GuardedTransition<TransitionType, C, S, E>) {
-        return transition.accepts (context, state, event);
-      } else {
-        return true;
-      }
-    };
-
-    transition_result result {};
-    for_each_transition (table, [&]<class TransitionType> (TransitionType& transition) {
-      if constexpr (Transition<TransitionType, C, S, E>) {
-        if (!result.triggered && check_guard (transition)) {
-          result.triggered = true;
-          result.state_changed = trigger (transition);
-        }
-      }
-    });
-
-    return result;
-  }
-
-  struct initialization_state
-  {};
-
-  struct shutdown_state
-  {};
-
-  struct initialization_event
-  {};
-
-  struct shutdown_event
-  {};
-
-  struct timeout_event
-  {};
-
-  namespace details
-  {
-    template<class...>
-    struct type_list;
-  }
-
-  template<class TransitionList, class StateList>
-  class state_machine;
-
-  template<std::move_constructible... Transitions, State... States>
-  class state_machine<details::type_list<Transitions...>, details::type_list<States...>>
-  {
-  private:
-    template<class... Ts>
-    struct first_type;
-
-    template<class T, class... Ts>
-    struct first_type<T, Ts...> : std::type_identity<T>
-    {};
-
-    template<class... Ts>
-    using first_t = typename first_type<Ts...>::type;
-
-  public:
-    static_assert (sizeof...(States) > 0);
-    static_assert (sizeof...(Transitions) > 0);
-
-    struct context_type;
-
-    static constexpr bool has_initialization_transition = //
-      (Transition<Transitions, context_type, initialization_state&, initialization_event> || ...);
-
-    template<State S>
-    static constexpr bool has_shutdown_transition = //
-      (Transition<Transitions, context_type, S&, shutdown_event> || ...);
-
-    static constexpr bool has_timed_state = (TimedState<States> || ...);
-
-    using transition_table = forest::sm::transition_table<Transitions...>;
-    using state_type = std::variant<initialization_state, shutdown_state, States...>;
-    using time_point_type = std::chrono::steady_clock::time_point;
-
-    constexpr state_machine (Transitions... transitions) //
-      : _table (std::move (transitions)...)
-      , _state (initialization_state ())
-    {}
-
-    /**
-     * Returns true if the current state is S
-     */
-    template<State S>
-      requires ((std::same_as<S, States> || ...) //
-        || std::same_as<S, initialization_state> //
-        || std::same_as<S, shutdown_state>)
-    [[nodiscard]] constexpr bool is () const
-    {
-      return std::holds_alternative<S> (_state);
-    }
-
-    /**
-     * Returns the current state by reference, assuming it is S.
-     */
-    template<State S>
-      requires ((std::same_as<S, States> || ...) //
-        || std::same_as<S, initialization_state> //
-        || std::same_as<S, shutdown_state>)
-    [[nodiscard]] constexpr S& current_state ()
-    {
-      return std::get<S> (_state);
-    }
-
-    /**
-     * Returns the current state by const reference, assuming it is S.
-     */
-    template<State S>
-      requires ((std::same_as<S, States> || ...) //
-        || std::same_as<S, initialization_state> //
-        || std::same_as<S, shutdown_state>)
-    [[nodiscard]] constexpr S const& current_state () const
-    {
-      return std::get<S> (_state);
-    }
-
-    constexpr transition_result start ()
-    {
-      // TODO: allow custom initialization
-      if constexpr (has_initialization_transition) {
-        return process_event (initialization_event {});
-      } else {
-        using first_state = first_t<States...>;
-        static_assert (std::default_initializable<first_state>);
-
-        context_type context {*this};
-        _state = first_state {};
-
-        if constexpr (TimedState<first_state>)
-          reset_timer ();
-
-        if constexpr (StateWithEntryAction<first_state, context_type>)
-          current_state<first_state> ().on_entry (context);
-        return {.triggered = true, .state_changed = true};
-      }
-    }
-
-    constexpr transition_result stop () //
-    {
-      // TODO: allow custom shutdown
-      auto const handler = [&]<State S> (S& current) {
-        if constexpr (has_shutdown_transition<S>) {
-          return process_event (shutdown_event {});
-        } else {
-          context_type context {*this};
-          if constexpr (StateWithExitAction<S, context_type>)
-            current.on_exit (context);
-          _state = shutdown_state {};
-          return transition_result {.triggered = true, .state_changed = true};
-        }
+      auto const set_commands = [&]<class... States, template<class...> class List> (List<States...>)
+      {
+        auto commands = collect_commands<States...> ();
+        std::cerr << "Set " << commands.size () << " commands: " << _bot.getApi ().setMyCommands (commands) << std::endl;
       };
 
-      return std::visit (handler, _state);
+      set_commands (StateList {});
+
+      // set event handlers
+      _bot.getEvents ().onAnyMessage ([&] (TgBot::Message::Ptr message) {
+        process_event (*message.get ());
+      });
+
+      _bot.getEvents ().onCallbackQuery ([&] (TgBot::CallbackQuery::Ptr query) {
+        process_event (*query.get ());
+      });
+
+      _bot.getEvents ().onInlineQuery ([&] (TgBot::InlineQuery::Ptr query) {
+        process_event (*query.get ());
+      });
+
+      // delete webhook to allow polling
+      _bot.getApi ().deleteWebhook ();
     }
 
-    template<Event E>
-    constexpr transition_result process_event (E event)
+    void process_event (TgBot::Message const& event)
     {
-      auto const handler = [&]<State S> (S& current) {
-        context_type context {*this};
-        return trigger_transition (_table, std::move (context), current, std::move (event), _state);
-      };
-
-      return std::visit (handler, _state);
+      if (event.chat && event.text.starts_with ("/")) {
+        std::int64_t chat_id = event.chat->id;
+        std::string text = event.text;
+        process_event (chat_id, parse_command (std::move (text), event.messageId));
+      } else if (event.chat) {
+        std::int64_t chat_id = event.chat->id;
+        std::string text = event.text;
+        process_event (chat_id, forest::events::message {chat_id, text});
+      }
     }
 
-    constexpr transition_result process_timeouts ()
+    void process_event (TgBot::CallbackQuery const& event)
     {
-      auto const handler = [&]<State S> (S& current) {
-        if constexpr (TimedState<S>)
-          if (entry_time_elapsed () > current.timeout_duration ())
-            return process_event (timeout_event {});
-
-        return transition_result {};
-      };
-
-      return std::visit (handler, _state);
+      if (event.message && event.message->chat) {
+        std::int64_t chat_id = event.message->chat->id;
+        process_event (chat_id, parse_button (event));
+      }
     }
 
-    [[nodiscard]] std::chrono::milliseconds entry_time_elapsed () const //
+    void process_event (TgBot::InlineQuery const& event)
     {
-      return std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - _timer_start);
+      std::cerr << "process_event InlineQuery " << event.id << ", " << event.query << std::endl;
     }
 
-    void reset_timer () //
+    void process_event (std::int64_t chat_id, auto const& event)
     {
-      _timer_start = std::chrono::steady_clock::now ();
+      if (!_instances.contains (chat_id)) {
+        _global_storage.try_emplace (chat_id);
+        _context.try_emplace (chat_id, chat_id, _bot, _database, _global_storage.at (chat_id));
+        _instances.try_emplace (chat_id, _context.at (chat_id));
+      }
+      _instances.at (chat_id).update ();
+      _instances.at (chat_id).react (event);
     }
 
-    // clang-format off
+    auto chat_ids () const -> std::vector<std::int64_t>
+    {
+      auto result = std::vector<std::int64_t> ();
+      for (auto& x : _context)
+        result.push_back (x.first);
+      return result;
+    }
+
+    TgBot::Bot& get_bot ()
+    {
+      return _bot;
+    }
+
   private:
-    // clang-format on
+    events::command parse_command (std::string text, std::int64_t id)
+    {
+      text = text.substr (1);
 
-    transition_table _table;
-    state_type _state;
+      int space_pos = text.find_first_of (" ");
+      if (space_pos == std::string::npos)
+        space_pos = text.length ();
 
-    [[no_unique_address]] time_point_type _timer_start;
+      std::string prefix = text.substr (0, space_pos);
+
+      int not_space_pos = text.find_first_not_of (" \t", space_pos);
+      if (not_space_pos == std::string::npos)
+        not_space_pos = text.length ();
+
+      std::string parameters = text.substr (not_space_pos);
+      return {.prefix = std::move (prefix), .parameters = std::move (parameters), .id = id};
+    }
+
+    events::button parse_button (TgBot::CallbackQuery const& callback)
+    {
+      return events::button::from_query (callback);
+    }
   };
 
-  template<State... States>
-  constexpr inline auto make_state_machine = []<std::move_constructible... Ts> (Ts... transitions)
-  {
-    return state_machine<details::type_list<Ts...>, details::type_list<States...>> (std::move (transitions)...);
-  };
+  // ===
 
-  template<std::move_constructible... Transitions, State... States>
-  class state_machine<details::type_list<Transitions...>, details::type_list<States...>>::context_type
+  template<class Bot>
+  class long_poll_bot
   {
-  public:
-    using state_machine_type = state_machine;
-    using state_machine_reference = std::reference_wrapper<state_machine>;
-
   private:
-    state_machine_reference sm;
+    TgBot::TgLongPoll _poll_bot;
 
   public:
-    constexpr context_type (state_machine& init)
-      : sm (init)
+    long_poll_bot (Bot& _bot)
+      : _poll_bot (_bot.get_bot ())
     {}
 
-    constexpr void reset_timer () const //
+    void start ()
     {
-      sm.get ().reset_timer ();
-    }
-
-    [[nodiscard]] constexpr std::chrono::milliseconds entry_time_elapsed () const //
-    {
-      return sm.get ().entry_time_elapsed ();
-    }
-
-    template<State S>
-    [[nodiscard]] constexpr bool is () const
-    {
-      return sm->template is<S> ();
-    }
-
-    template<State S>
-    [[nodiscard]] constexpr S& current_state () const
-    {
-      return sm->template current_state<S> ();
+      _poll_bot.start ();
     }
   };
 
-} // namespace forest::sm
+  template<class Bot>
+  long_poll_bot (Bot&) -> long_poll_bot<Bot>;
 
-namespace std
-{
-  template<class... Ts>
-  struct tuple_size<forest::sm::transition_table<Ts...>> : std::tuple_size<std::tuple<Ts...>>
-  {};
+  // ===
 
-  template<std::size_t I, class... Ts>
-  struct tuple_element<I, forest::sm::transition_table<Ts...>> : std::tuple_element<I, std::tuple<Ts...>>
-  {};
-} // namespace std
+  template<class Bot>
+  class webhook_bot
+  {
+  private:
+    TgBot::TgWebhookTcpServer _webhook_bot;
+
+  public:
+    webhook_bot (std::string url, unsigned port, Bot& _bot)
+      : _webhook_bot (port, _bot.get_bot ())
+    {
+      _bot.get_bot ().getApi ().setWebhook (url);
+    }
+
+    void start ()
+    {
+      _webhook_bot.start ();
+    }
+  };
+
+  template<class Bot>
+  webhook_bot (Bot) -> webhook_bot<Bot>;
+
+} // namespace forest

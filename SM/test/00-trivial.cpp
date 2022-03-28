@@ -1,4 +1,4 @@
-#include <forest/sm/sm.hpp>
+#include <forest/sm2.hpp>
 
 #include <iostream>
 
